@@ -178,7 +178,7 @@ int memslot_set_mapping(hax_gpa_space *gpa_space, uint64_t start_gfn,
         return -EINVAL;
 
     is_valid = memslot_is_valid(flags);
-    if (is_valid) {
+    if (is_valid && !(flags & HAX_MEMSLOT_INVALIDUVA)) {
         if (flags & HAX_MEMSLOT_STANDALONE) {
             // Create a "disposable" RAM block for this stand-alone mapping
             ret = ramblock_add(&gpa_space->ramblock_list, uva,
