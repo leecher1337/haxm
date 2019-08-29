@@ -249,6 +249,7 @@ int hax_teardown_vm(struct vm_t *vm)
     ept_tree_free(&vm->ept_tree);
     gpa_space_free(&vm->gpa_space);
 #endif  // CONFIG_HAX_EPT2
+    coalesced_write_exit(vm);
     hax_vfree(vm, sizeof(struct vm_t));
     hax_log(HAX_LOGE, "...........hax_teardown_vm\n");
     return 0;

@@ -280,6 +280,14 @@ static int handle_set_ram(struct vm_t *vm, uint64_t start_gpa, uint64_t size,
     }
     memslot_dump_list(gpa_space);
 
+    if (flags & HAX_RAM_INFO_COALESCED) {
+        ret = coalesced_set_mapping(vm, start_gfn, npages);
+        if (ret) {
+            hax_log(HAX_LOGE, "%s: coalesced_set_mapping() failed: ret=%d, start_gfn=0x%llx,"
+                " npages=0x%llx\n", __func__, ret, start_gfn, npages);
+        }
+    }
+
     ept_tree = &vm->ept_tree;
     if (!hax_test_and_clear_bit(0, (uint64_t *)&ept_tree->invept_pending)) {
         // INVEPT pending flag was set

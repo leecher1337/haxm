@@ -173,6 +173,11 @@ struct hax_fastmmio {
     uint64_t _cr4;
 } PACKED;
 
+struct hax_coalesced_mmio {
+    uint32_t size;
+    struct hax_fastmmio mmio[0x1000];
+} PACKED;
+
 struct hax_module_version {
     uint32_t compat_version;
     uint32_t cur_version;
@@ -194,6 +199,7 @@ struct hax_module_version {
 #define HAX_CAP_RAM_PROTECTION     (1 << 6)
 #define HAX_CAP_DEBUG              (1 << 7)
 #define HAX_CAP_IMPLICIT_RAMBLOCK  (1 << 8)
+#define HAX_CAP_COALESCED          (1 << 9)
 
 struct hax_capabilityinfo {
     /*
@@ -243,6 +249,8 @@ struct hax_ramblock_info {
 
 // Read-only mapping
 #define HAX_RAM_INFO_ROM (1 << 0)
+// Coalesce writes to this memory block
+#define HAX_RAM_INFO_COALESCED (1 << 5)
 // Stand-alone mapping into a new HVA range
 #define HAX_RAM_INFO_STANDALONE (1 << 6)
 

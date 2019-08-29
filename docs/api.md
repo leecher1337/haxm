@@ -97,6 +97,7 @@ itself as well as the host environment.
   #define HAX_CAP_TUNNEL_PAGE        (1 << 5)
   #define HAX_CAP_DEBUG              (1 << 7)
   #define HAX_CAP_IMPLICIT_RAMBLOCK  (1 << 8)
+  #define HAX_CAP_COALESCED          (1 << 9)
   ```
   * (Output) `wstatus`: The first set of capability flags reported to the
 caller. The following bits may be set, while others are reserved:
@@ -124,6 +125,8 @@ feature.
     * `HAX_CAP_64BIT_SETRAM`: If set, `HAX_VM_IOCTL_SET_RAM2` is available.
     * `HAX_CAP_IMPLICIT_RAMBLOCK`: If set, `HAX_VM_IOCTL_SET_RAM2` supports the
 `HAX_RAM_INFO_STANDALONE` flag.
+    * `HAX_CAP_COALESCED`: If set, MMIO writes can be coalesced until next exit
+and you get `HAX_EXIT_COALESCED_MMIO` callback.
   * (Output) `win_refcount`: (Windows only)
   * (Output) `mem_quota`: If the global memory cap setting is enabled (q.v.
 `HAX_IOCTL_SET_MEMLIMIT`), reports the current quota on memory allocation (the
@@ -323,6 +326,7 @@ Same as `HAX_VM_IOCTL_SET_RAM`, but takes a 64-bit size instead of 32-bit.
   } __attribute__ ((__packed__));
 
   #define HAX_RAM_INFO_ROM (1 << 0)
+  #define HAX_RAM_INFO_COALESCED (1 << 5)
   #define HAX_RAM_INFO_STANDALONE (1 << 6)
   #define HAX_RAM_INFO_INVALID (1 << 7)
   ```
@@ -340,6 +344,10 @@ buffer.
 while others are reserved:
     * `HAX_RAM_INFO_ROM`: If set, the GPA range will be mapped as read-only
 memory (ROM).
+    * `HAX_RAM_INFO_COALESCED`: If set, memory writes to this MMIO area (thus, 
+this flag only makes sense in combination with `HAX_RAM_INFO_INVALID`) are 
+queued in the driver until there is a VM-exit (i.e. due to IN/OUT). A 
+`HAX_EXIT_COALESCED_MMIO` is then sent before the real exit reason.
     * `HAX_RAM_INFO_STANDALONE`: If set, the HVA range must not overlap with any
 existing RAM block, and a new RAM block will be implicitly created for this
 stand-alone mapping. In other words, when using this flag, the caller should not

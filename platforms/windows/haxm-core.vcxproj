@@ -113,6 +113,7 @@
     </ClCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="..\..\core\coalesced.c" />
     <ClCompile Include="..\..\core\name.c" />
     <ClCompile Include="..\..\core\chunk.c" />
     <ClCompile Include="..\..\core\cpu.c" />

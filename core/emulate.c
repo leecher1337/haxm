@@ -29,6 +29,7 @@
  */
 
 #include "include/emulate.h"
+#include "include/coalesced.h"
 
 /* Instruction flags */
 /* Instruction does not read from destination */
@@ -1342,6 +1343,14 @@ restart:
     }
     if (!(opcode->flags & INSN_DST_NW)) {
         rc = operand_write(ctxt, &ctxt->dst);
+        if (rc == EM_EXIT_MMIO) {
+            // REPE is handled via HAX_EXIT_FASTMMIO and not via coalesced buf
+            if (ctxt->rep && ctxt->rep == PREFIX_REPE)
+                coalesced_flush(ctxt->vcpu);
+            else
+                rc = coalesced_write(ctxt);
+        }
+
         if (rc != EM_CONTINUE)
             goto exit;
     }
