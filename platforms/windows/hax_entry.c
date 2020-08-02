@@ -434,6 +434,16 @@ NTSTATUS HaxVcpuControl(PDEVICE_OBJECT DeviceObject,
             vcpu_setexcbmp(cvcpu, *(uint32_t*)inBuf);
             break;
         }
+        case HAX_VCPU_IOCTL_VA2GPA: {
+            uint64_t ea, pa;
+            if (inBufLength < sizeof(uint64_t) || outBufLength < sizeof(uint64_t)) {
+                ret = STATUS_INVALID_PARAMETER;
+                goto done;
+            }
+            vcpu_translate(cvcpu, (*(hax_vaddr_t *)inBuf), 0, (hax_paddr_t*)outBuf, NULL, false);
+            infret = sizeof(uint64_t);
+            break;
+        }
         default:
             hax_error("Unknow vcpu ioctl %lx\n",
                       irpSp->Parameters.DeviceIoControl.IoControlCode);

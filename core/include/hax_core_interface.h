@@ -74,6 +74,8 @@ int hax_vcpu_core_open(struct vcpu_t *vcpu);
 int vcpu_teardown(struct vcpu_t *vcpu);
 int vcpu_execute(struct vcpu_t *vcpu);
 int vcpu_interrupt(struct vcpu_t *vcpu, uint8_t vector);
+uint vcpu_translate(struct vcpu_t *vcpu, hax_vaddr_t va, uint access, hax_paddr_t *pa,
+    uint64_t *len, bool update);
 
 /*
  * Find a vcpu with corresponding id, |refer| decides whether a reference count
