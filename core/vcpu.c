@@ -100,6 +100,7 @@ static int exit_invalid_guest_state(struct vcpu_t *vcpu,
 static int exit_ept_misconfiguration(struct vcpu_t *vcpu,
                                      struct hax_tunnel *htun);
 static int exit_ept_violation(struct vcpu_t *vcpu, struct hax_tunnel *htun);
+static int exit_mtf(struct vcpu_t *vcpu, struct hax_tunnel *htun);
 static int null_handler(struct vcpu_t *vcpu, struct hax_tunnel *hun);
 
 static void advance_rip(struct vcpu_t *vcpu);
@@ -385,6 +386,7 @@ static int (*handler_funcs[])(struct vcpu_t *vcpu, struct hax_tunnel *htun) = {
     [VMX_EXIT_FAILED_VMENTER_GS]  = exit_invalid_guest_state,
     [VMX_EXIT_EPT_VIOLATION]      = exit_ept_violation,
     [VMX_EXIT_EPT_MISCONFIG]      = exit_ept_misconfiguration,
+    [VMX_EXIT_MTF_EXIT]           = exit_mtf
 };
 
 static int nr_handlers = ARRAY_ELEMENTS(handler_funcs);
@@ -2405,6 +2407,15 @@ static int exit_exc_nmi(struct vcpu_t *vcpu, struct hax_tunnel *htun)
 
     return HAX_RESUME;
 }
+static int exit_mtf(struct vcpu_t *vcpu, struct hax_tunnel *htun)
+{
+    hax_debug("monitor trap flag hit\n");
+    htun->_exit_status = HAX_EXIT_DEBUG;
+    htun->debug.rip = vcpu->state->_rip;
+    htun->debug.dr6 = 0;
+    htun->debug.dr7 = 0;
+    return HAX_EXIT;
+}
 
 static void handle_machine_check(struct vcpu_t *vcpu)
 {
@@ -4093,7 +4104,18 @@ void vcpu_debug(struct vcpu_t *vcpu, struct hax_debug_t *debug)
     vcpu->debug_control_dirty = 1;
     vcpu->dr_dirty = 1;
     vcpu_update_exception_bitmap(vcpu);
-};
+    if (debug->control & HAX_DEBUG_MONSTEP)
+    {
+        vmx(vcpu, pcpu_ctls) |= MONITOR_TRAP_FLAG;
+        vmx(vcpu, pcpu_ctls_base) |= MONITOR_TRAP_FLAG;
+    }
+    else
+    {
+        vmx(vcpu, pcpu_ctls) &= ~MONITOR_TRAP_FLAG;
+        vmx(vcpu, pcpu_ctls_base) &= ~MONITOR_TRAP_FLAG;
+    }
+    vmwrite(vcpu, VMX_PRIMARY_PROCESSOR_CONTROLS, vmx(vcpu, pcpu_ctls));
+}
 void vcpu_setexcbmp(struct vcpu_t *vcpu, uint32_t excbmp)
 {
     vcpu->user_excbmp = excbmp;

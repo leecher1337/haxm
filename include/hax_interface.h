@@ -294,6 +294,7 @@ struct hax_qemu_version {
 #define HAX_DEBUG_STEP       (1 << 1)
 #define HAX_DEBUG_USE_SW_BP  (1 << 2)
 #define HAX_DEBUG_USE_HW_BP  (1 << 3)
+#define HAX_DEBUG_MONSTEP    (1 << 4) // Monitor trap flag stepping
 
 struct hax_debug_t {
     uint32_t control;
