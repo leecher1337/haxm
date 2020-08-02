@@ -115,8 +115,10 @@ int ept_handle_access_violation(hax_gpa_space *gpa_space, hax_ept_tree *tree,
     // dirty hack.
     // TODO: Make chunks more flexible, so we can pin host RAM in finer
     // granularity (as small as one page) and hide chunks from user space.
-    if (gpa_space_is_chunk_protected(gpa_space, gfn, fault_gfn))
+    if (gpa_space_is_chunk_protected(gpa_space, gfn, fault_gfn)) {
+        if (slot->flags & HAX_MEMSLOT_FAULTISMMIO) return 0;
         return -EFAULT;
+    }
 
     // The faulting GPA maps to RAM/ROM
     is_rom = slot->flags & HAX_MEMSLOT_READONLY;

@@ -245,6 +245,7 @@ struct hax_ramblock_info {
 
 #define HAX_RAM_INFO_ROM     0x01  // read-only
 #define HAX_RAM_INFO_INVALID 0x80  // unmapped, usually used for MMIO
+#define HAX_RAM_INFO_FAULTISMMIO 0x10 // Handle fault on this page as MMIO request
 
 struct hax_set_ram_info {
     uint64_t pa_start;

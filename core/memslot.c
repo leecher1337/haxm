@@ -428,8 +428,8 @@ static inline bool memslot_is_same_type(hax_memslot *dest, hax_memslot *src)
     return (dest->block == src->block) &&
            (dest->offset_within_block - src->offset_within_block ==
             (dest->base_gfn - src->base_gfn) << PG_ORDER_4K) &&
-           ((dest->flags & HAX_MEMSLOT_READONLY) ==
-            (src->flags & HAX_MEMSLOT_READONLY));
+           ((dest->flags & (HAX_MEMSLOT_READONLY | HAX_MEMSLOT_FAULTISMMIO)) ==
+            (src->flags & (HAX_MEMSLOT_READONLY | HAX_MEMSLOT_FAULTISMMIO)));
 }
 
 static bool memslot_is_inner(hax_memslot *dest, hax_memslot *src,
