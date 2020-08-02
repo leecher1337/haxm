@@ -1673,6 +1673,11 @@ int vcpu_execute(struct vcpu_t *vcpu)
     }
     hax_debug("vcpu begin to run....in PE\n");
 
+    if (htun->_exit_status == HAX_EXIT_COALESCED_MMIO && 
+        coalesced_handle(vcpu) == HAX_EXIT) {
+        err = HAX_EXIT;
+        goto out;
+    }
     if (htun->_exit_status == HAX_EXIT_IO) {
         handle_io_post(vcpu, htun);
     }
@@ -1698,6 +1703,7 @@ out:
         vcpu_vmread_all(vcpu);
         vcpu_is_panic(vcpu);
     }
+    else coalesced_flush(vcpu);
     htun->apic_base = vcpu->gstate.apic_base;
     hax_mutex_unlock(vcpu->tmutex);
 
@@ -2172,6 +2178,7 @@ static int vcpu_emulate_insn(struct vcpu_t *vcpu)
         dump_vmcs(vcpu);
         return HAX_RESUME;
     }
+    if (rc == EM_CONTINUE && vcpu->tunnel->_exit_status == HAX_EXIT_COALESCED_MMIO) return HAX_RESUME;
     return HAX_EXIT;
 }
 

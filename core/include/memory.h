@@ -76,6 +76,8 @@ typedef struct hax_memslot {
 
 // Read-only mapping, == HAX_RAM_INFO_ROM in hax_interface.h
 #define HAX_MEMSLOT_READONLY 0x01
+// Internal: Don't look at user virtual address 
+#define HAX_MEMSLOT_INVALIDUVA 0x10
 // Treat a protection fault as MMIO exit
 #define HAX_MEMSLOT_FAULTISMMIO  0x20
 // Unmapped, == HAX_RAM_INFO_INVALID in hax_interface.h

@@ -243,7 +243,7 @@ static int handle_set_ram(struct vm_t *vm, uint64_t start_gpa, uint64_t size,
 
     // HAX_RAM_INFO_INVALID indicates that guest physical address range
     // [start_gpa, start_gpa + size) should be unmapped
-    if (unmap && (flags != HAX_RAM_INFO_INVALID || start_uva)) {
+    if (unmap && ((flags & ~HAX_RAM_INFO_COALESCED) != HAX_RAM_INFO_INVALID || start_uva)) {
         hax_error("%s: Invalid start_uva=0x%llx or flags=0x%x for unmapping\n",
                   __func__, start_uva, flags);
         return -EINVAL;
@@ -279,6 +279,13 @@ static int handle_set_ram(struct vm_t *vm, uint64_t start_gpa, uint64_t size,
     }
     memslot_dump_list(gpa_space);
 
+    if (flags & HAX_RAM_INFO_COALESCED) {
+        ret = coalesced_set_mapping(vm, start_gfn, npages);
+        if (ret) {
+            hax_error("%s: coalesced_set_mapping() failed: ret=%d, start_gfn=0x%llx,"
+                " npages=0x%llx\n", __func__, ret, start_gfn, npages);
+        }
+    }
     ept_tree = &vm->ept_tree;
     if (!hax_test_and_clear_bit(0, (uint64_t *)&ept_tree->invept_pending)) {
         // INVEPT pending flag was set

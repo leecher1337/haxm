@@ -96,6 +96,7 @@ itself as well as the host environment.
   #define HAX_CAP_64BIT_SETRAM       (1 << 4)
   #define HAX_CAP_TUNNEL_PAGE        (1 << 5)
   #define HAX_CAP_DEBUG              (1 << 7)
+  #define HAX_CAP_COALESCED          (1 << 9)
   ```
   * (Output) `wstatus`: The first set of capability flags reported to the
 caller. The following bits may be set, while others are reserved:
@@ -121,6 +122,8 @@ feature. This is always the case with API v2 and later.
     * `HAX_CAP_UG`: If set, the host CPU supports the Unrestricted Guest (UG)
 feature.
     * `HAX_CAP_64BIT_SETRAM`: If set, HAX\_VM\_IOCTL\_SET\_RAM2 is available.
+    * `HAX_CAP_COALESCED`: If set, MMIO writes can be coalesced until next exit
+and you get `HAX_EXIT_COALESCED_MMIO` callback.
   * (Output) `win_refcount`: (Windows only)
   * (Output) `mem_quota`: If the global memory cap setting is enabled (q.v.
 `HAX_IOCTL_SET_MEMLIMIT`), reports the current quota on memory allocation (the
@@ -319,8 +322,9 @@ Same as `HAX_VM_IOCTL_SET_RAM`, but takes a 64-bit size instead of 32-bit.
       uint64_t reserved2;
   } __attribute__ ((__packed__));
 
-  #define HAX_RAM_INFO_ROM     0x01
-  #define HAX_RAM_INFO_INVALID 0x80
+  #define HAX_RAM_INFO_ROM        0x01
+  #define HAX_RAM_INFO_COALESCED  0x20
+  #define HAX_RAM_INFO_INVALID    0x80
   ```
   * (Input) `pa_start`: The start address of the GPA range to map. Must be page-
 aligned (i.e. a multiple of 4KB).
@@ -336,6 +340,10 @@ buffer.
 while others are reserved:
     * `HAX_RAM_INFO_ROM`: If set, the GPA range will be mapped as read-only
 memory (ROM).
+    * `HAX_RAM_INFO_COALESCED`: If set, memory writes to this MMIO area (thus, 
+this flag only makes sense in combination with `HAX_RAM_INFO_INVALID`) are 
+queued in the driver until there is a VM-exit (i.e. due to IN/OUT). A 
+`HAX_EXIT_COALESCED_MMIO` is then sent before the real exit reason.
     * `HAX_RAM_INFO_INVALID`: (Since API v4) If set, any existing mappings for
 any guest physical pages in the GPA range will be removed, i.e. the GPA range
 will be reserved for MMIO. This flag must not be combined with any other flags,

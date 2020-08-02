@@ -350,6 +350,7 @@ int hax_get_capability(void *buf, int bufLeng, int *outLength)
         if (hax->ug_enable_flag) {
             cap->winfo |= HAX_CAP_UG;
         }
+        cap->winfo |= HAX_CAP_COALESCED;
     }
 
     if (hax->mem_limit) {

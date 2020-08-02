@@ -34,6 +34,7 @@
 #include "vmx.h"
 #include "segments.h"
 #include "vcpu.h"
+#include "coalesced.h"
 #include "../../include/hax.h"
 
 #ifdef CONFIG_HAX_EPT2
@@ -88,6 +89,7 @@ struct vm_t {
     uint64_t spare_ramsize;
     uint ram_entry_num;
     struct hax_vcpu_mem *ram_entry;
+    struct coalesced_t *clsc;
 };
 
 struct hva_entry {
@@ -112,7 +114,8 @@ enum exit_status {
     HAX_EXIT_FAST_MMIO,
     HAX_EXIT_PAGEFAULT,
     HAX_EXIT_DEBUG,
-    HAX_EXIT_NMI
+    HAX_EXIT_NMI,
+    HAX_EXIT_COALESCED_MMIO
 };
 
 enum run_flag {

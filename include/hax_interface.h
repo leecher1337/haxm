@@ -176,6 +176,10 @@ struct hax_fastmmio {
     uint64_t _cr4;
 } PACKED;
 
+struct hax_coalesced_mmio {
+    uint32_t size;
+    struct hax_fastmmio mmio[0x1000];
+} PACKED;
 struct hax_module_version {
     uint32_t compat_version;
     uint32_t cur_version;
@@ -196,6 +200,7 @@ struct hax_module_version {
 #define HAX_CAP_TUNNEL_PAGE        (1 << 5)
 #define HAX_CAP_RAM_PROTECTION     (1 << 6)
 #define HAX_CAP_DEBUG              (1 << 7)
+#define HAX_CAP_COALESCED          (1 << 9)
 
 struct hax_capabilityinfo {
     /*
@@ -245,6 +250,7 @@ struct hax_ramblock_info {
 
 #define HAX_RAM_INFO_ROM     0x01  // read-only
 #define HAX_RAM_INFO_INVALID 0x80  // unmapped, usually used for MMIO
+#define HAX_RAM_INFO_COALESCED 0x20 // Coalesce writes to this memory block
 #define HAX_RAM_INFO_FAULTISMMIO 0x10 // Handle fault on this page as MMIO request
 
 struct hax_set_ram_info {
