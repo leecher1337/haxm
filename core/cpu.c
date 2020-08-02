@@ -386,12 +386,14 @@ int cpu_vmx_execute(struct vcpu_t *vcpu, struct hax_tunnel *htun)
         /* sometimes, the TSS segment type from qemu is not right.
          * let's hard-code it for now
          */
+#ifdef QEMU_HACK /* leecher1337: Don't you dare to ruin my 16bit TSS! */
         {
             uint32_t temp = vmread(vcpu, GUEST_TR_AR);
 
             temp = (temp & ~0xf) | 0xb;
             vmwrite(vcpu, GUEST_TR_AR, temp);
         }
+#endif
 
         res = cpu_vmx_run(vcpu, htun);
         if (res) {
