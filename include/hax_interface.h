@@ -155,6 +155,7 @@ struct hax_tunnel {
         } debug;
         struct {
             uint32_t exit_intr_info;
+            uint32_t exit_exception_error_code;
         } nmi;
     };
     uint64_t apic_base;

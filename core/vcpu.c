@@ -2395,6 +2395,7 @@ static int exit_exc_nmi(struct vcpu_t *vcpu, struct hax_tunnel *htun)
             uint64_t va;
             htun->_exit_status = HAX_EXIT_NMI;
             htun->nmi.exit_intr_info = exit_intr_info.raw;
+            htun->nmi.exit_exception_error_code = vmx(vcpu, exit_exception_error_code);
             va = vcpu->state->_cs.long_mode == 1 ? vcpu->state->_rip : vcpu->state->_cs.base + vcpu->state->_rip;
             vcpu_read_guest_virtual(vcpu, va, vcpu->io_buf, INSTR_MAX_LEN, INSTR_MAX_LEN, 0);
             return HAX_EXIT;
