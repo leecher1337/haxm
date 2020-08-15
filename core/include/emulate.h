@@ -92,6 +92,7 @@ struct em_operand_t;
 #define RFLAGS_SF  (1 <<  7)
 #define RFLAGS_DF  (1 << 10)
 #define RFLAGS_OF  (1 << 11)
+#define RFLAGS_VM  (1 << 17)
 
 #define RFLAGS_MASK_OSZAPC \
     (RFLAGS_CF | RFLAGS_PF | RFLAGS_AF | RFLAGS_ZF | RFLAGS_SF | RFLAGS_OF)

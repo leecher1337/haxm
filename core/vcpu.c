@@ -46,6 +46,7 @@
 #include "include/paging.h"
 #include "include/hax_core_interface.h"
 #include "include/hax_driver.h"
+#include "include/validate.h"
 
 uint64_t gmsr_list[NR_GMSR] = {
     IA32_STAR,
@@ -3709,6 +3710,7 @@ static int exit_invalid_guest_state(struct vcpu_t *vcpu,
 {
     hax_panic_vcpu(vcpu, "vcpu->tr:%x\n", vcpu->state->_tr.ar);
     dump_vmcs(vcpu);
+    guest_state_valid(vcpu);
     return HAX_RESUME;
 }
 

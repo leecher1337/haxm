@@ -131,6 +131,7 @@
     <ClCompile Include="..\..\core\memslot.c" />
     <ClCompile Include="..\..\core\page_walker.c" />
     <ClCompile Include="..\..\core\ramblock.c" />
+    <ClCompile Include="..\..\core\validate.c" />
     <ClCompile Include="..\..\core\vcpu.c" />
     <ClCompile Include="..\..\core\vm.c" />
     <ClCompile Include="..\..\core\vmx.c" />
