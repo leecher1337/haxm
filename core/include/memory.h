@@ -34,7 +34,9 @@
 #include "../../include/hax_types.h"
 #include "../../include/hax_list.h"
 
-#define HAX_CHUNK_SHIFT 21
+//#define HAX_CHUNK_SHIFT 21
+// leecher1337: We need 4KB, instead of 2MB granularity for DOS, I suppose...
+#define HAX_CHUNK_SHIFT 12
 #define HAX_CHUNK_SIZE  (1U << HAX_CHUNK_SHIFT)  // 2MB
 
 typedef struct hax_chunk {
