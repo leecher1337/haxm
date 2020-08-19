@@ -1038,7 +1038,7 @@ uint32_t vcpu_write_guest_virtual(struct vcpu_t *vcpu, hax_vaddr_t addr,
     hax_paddr_t g_cr3 = 0;
 #endif
 #endif // !CONFIG_HAX_EPT2
-    hax_assert(flag == 0 || flag == 1);
+    hax_assert(flag == 0 || flag == 1 || flag == 2);
 
 #ifndef CONFIG_HAX_EPT2
 #ifdef HAX_ARCH_X86_32

@@ -387,7 +387,8 @@ static int (*handler_funcs[])(struct vcpu_t *vcpu, struct hax_tunnel *htun) = {
     [VMX_EXIT_FAILED_VMENTER_GS]  = exit_invalid_guest_state,
     [VMX_EXIT_EPT_VIOLATION]      = exit_ept_violation,
     [VMX_EXIT_EPT_MISCONFIG]      = exit_ept_misconfiguration,
-    [VMX_EXIT_MTF_EXIT]           = exit_mtf
+    [VMX_EXIT_MTF_EXIT]           = exit_mtf,
+    [VMX_EXIT_TASK_SWITCH]        = exit_taskswitch
 };
 
 static int nr_handlers = ARRAY_ELEMENTS(handler_funcs);
@@ -2338,6 +2339,426 @@ static void vcpu_init_emulator(struct vcpu_t *vcpu)
     em_ctxt->finished = true;
 }
 
+static int load_guest_segment_descriptor(struct vcpu_t *vcpu, uint16_t selector,
+    struct seg_desc_t *seg_desc)
+{
+    segment_desc_t *desc = SEL_IS_LDT(selector) ? &vcpu->state->_ldt : &vcpu->state->_gdt;
+    if (desc->limit < (selector | 7) || (SEL_IS_LDT(selector) && desc->null) ||
+        vcpu_read_guest_virtual(vcpu, desc->base + (selector & 0xfff8), seg_desc, sizeof(struct seg_desc_t),
+            sizeof(struct seg_desc_t), 2) != sizeof(struct seg_desc_t))
+    {
+        hax_inject_exception(vcpu, VECTOR_GP, selector & 0xfffc);
+        return 1;
+    }
+    return 0;
+}
+static int save_guest_segment_descriptor(struct vcpu_t *vcpu, uint16_t selector,
+    struct seg_desc_t *seg_desc)
+{
+    segment_desc_t *desc = SEL_IS_LDT(selector) ? &vcpu->state->_ldt : &vcpu->state->_gdt;
+    if (desc->limit < (selector | 7) || (SEL_IS_LDT(selector) && desc->null) ||
+        vcpu_write_guest_virtual(vcpu, desc->base + (selector & 0xfff8), sizeof(struct seg_desc_t), seg_desc,
+            sizeof(struct seg_desc_t), 2) != sizeof(struct seg_desc_t))
+    {
+        return 1;
+    }
+    return 0;
+}
+static segment_desc_t get_realmode_segment(uint16_t selector)
+{
+    segment_desc_t segvar = {
+        .base = selector << 4,
+        .limit = 0xffff,
+        .selector = selector,
+        .type = 3,
+        .present = 1,
+        .dpl = 3,
+        .operand_size = 0,
+        .desc = 1,
+        .long_mode = 0,
+        .granularity = 0,
+        .available = 0,
+        .null = 0,
+    };
+    return segvar;
+}
+static void seg_desct_to_hax_desct(struct seg_desc_t *from, uint16_t selector, struct segment_desc_t *to)
+{
+    memset(to, 0, sizeof(segment_desc_t));
+    to->base = (from->_base1 << 24) | from->_base0;
+    to->limit = (from->_limit1 << 16) | from->_limit0;
+    if (from->_granularity)
+    {
+        to->limit <<= 12;
+        to->limit |= 0xffff;
+    }
+    to->selector = selector;
+    to->type = from->_type;
+    to->present = from->_present;
+    to->dpl = from->_dpl;
+    to->operand_size = from->_d;
+    to->desc = from->_s;
+    to->long_mode = from->_longmode;
+    to->granularity = from->_granularity;
+    to->available = from->_avl;
+    if (!selector) to->null = 1;
+}
+
+static int load_segment_descriptor_to_hax_desct(struct vcpu_t *vcpu,
+    uint16_t selector,
+    struct segment_desc_t *hax_seg)
+{
+    struct seg_desc_t seg_desc;
+
+    if (load_guest_segment_descriptor(vcpu, selector, &seg_desc))
+        return 1;
+    seg_desct_to_hax_desct(&seg_desc, selector, hax_seg);
+    return 0;
+}
+
+static void save_state_to_tss16(struct vcpu_t *vcpu,
+    struct tss_segment_16 *tss)
+{
+    tss->ip = vcpu->state->_eip;
+    tss->flag = vcpu->state->_eflags;
+    tss->ax = vcpu->state->_ax;
+    tss->cx = vcpu->state->_cx;
+    tss->dx = vcpu->state->_dx;
+    tss->bx = vcpu->state->_bx;
+    tss->sp = vcpu->state->_sp;
+    tss->bp = vcpu->state->_bp;
+    tss->si = vcpu->state->_si;
+    tss->di = vcpu->state->_di;
+
+    tss->es = vcpu->state->_es.selector;
+    tss->cs = vcpu->state->_cs.selector;
+    tss->ss = vcpu->state->_ss.selector;
+    tss->ds = vcpu->state->_ds.selector;
+    tss->ldt = vcpu->state->_ldt.selector;
+}
+
+static int load_state_from_tss16(struct vcpu_t *vcpu,
+    struct tss_segment_16 *tss)
+{
+    struct vcpu_state_t state = *vcpu->state;
+
+    state._rip = tss->ip;
+    state._rflags = tss->flag | 2;
+    state._rax = tss->ax;
+    state._rcx = tss->cx;
+    state._rdx = tss->dx;
+    state._rbx = tss->bx;
+    state._rsp = tss->sp;
+    state._rbp = tss->bp;
+    state._rsi = tss->si;
+    state._rdi = tss->di;
+
+    if ((state._eflags & EFLAGS_VM) || !(state._cr0 & CR0_PE))
+    {
+        state._es = get_realmode_segment(tss->es);
+        state._cs = get_realmode_segment(tss->cs);
+        state._ss = get_realmode_segment(tss->ss);
+        state._ds = get_realmode_segment(tss->ds);
+        if (!(state._cr0 & CR0_PE))
+            state._ldt = get_realmode_segment(tss->ldt);
+        else
+            if (load_segment_descriptor_to_hax_desct(vcpu, tss->ldt, &state._ldt)) return 1;
+    }
+    else
+    {
+        segment_desc_t _ldt;
+
+        if (load_segment_descriptor_to_hax_desct(vcpu, tss->ldt, &state._ldt)) return 1;
+        _ldt = vcpu->state->_ldt;
+        vcpu->state->_ldt = state._ldt;
+        if (load_segment_descriptor_to_hax_desct(vcpu, tss->es, &state._es) ||
+            load_segment_descriptor_to_hax_desct(vcpu, tss->cs, &state._cs) ||
+            load_segment_descriptor_to_hax_desct(vcpu, tss->ss, &state._ss) ||
+            load_segment_descriptor_to_hax_desct(vcpu, tss->ds, &state._ds)
+            ) return 1;
+        vcpu->state->_ldt = _ldt; // So that it gets updated in vcpu_set_regs
+
+        // Set "Accessed" bit
+        state._es.type |= 1;
+        state._cs.type |= 9;
+        state._ss.type |= 1;
+        state._ds.type |= 1;
+
+        if (!state._es.desc) state._es.null = 1;
+        if (!state._ds.desc) state._ds.null = 1;
+    }
+
+    vcpu_set_regs(vcpu, &state);
+
+    return 0;
+}
+
+static void save_state_to_tss32(struct vcpu_t *vcpu,
+    struct tss_segment_32 *tss)
+{
+    tss->cr3 = vcpu->state->_cr3;
+    tss->eip = vcpu->state->_eip;
+    tss->eflags = vcpu->state->_eflags;
+    tss->eax = vcpu->state->_eax;
+    tss->ecx = vcpu->state->_ecx;
+    tss->edx = vcpu->state->_edx;
+    tss->ebx = vcpu->state->_ebx;
+    tss->esp = vcpu->state->_esp;
+    tss->ebp = vcpu->state->_ebp;
+    tss->esi = vcpu->state->_esi;
+    tss->edi = vcpu->state->_edi;
+
+    tss->es = vcpu->state->_es.selector;
+    tss->cs = vcpu->state->_cs.selector;
+    tss->ss = vcpu->state->_ss.selector;
+    tss->ds = vcpu->state->_ds.selector;
+    tss->fs = vcpu->state->_fs.selector;
+    tss->gs = vcpu->state->_gs.selector;
+    tss->ldt_selector = vcpu->state->_ldt.selector;
+}
+
+static int load_state_from_tss32(struct vcpu_t *vcpu,
+    struct tss_segment_32 *tss)
+{
+    struct vcpu_state_t state = *vcpu->state;
+
+    state._cr3 = tss->cr3;
+    state._rip = tss->eip;
+    state._rflags = tss->eflags | 2;
+    state._rax = tss->eax;
+    state._rcx = tss->ecx;
+    state._rdx = tss->edx;
+    state._rbx = tss->ebx;
+    state._rsp = tss->esp;
+    state._rbp = tss->ebp;
+    state._rsi = tss->esi;
+    state._rdi = tss->edi;
+
+    if ((state._eflags & EFLAGS_VM) || !(state._cr0 & CR0_PE))
+    {
+        state._es = get_realmode_segment(tss->es);
+        state._cs = get_realmode_segment(tss->cs);
+        state._ss = get_realmode_segment(tss->ss);
+        state._ds = get_realmode_segment(tss->ds);
+        state._fs = get_realmode_segment(tss->fs);
+        state._gs = get_realmode_segment(tss->gs);
+        if (!(state._cr0 & CR0_PE))
+            state._ldt = get_realmode_segment(tss->ldt_selector);
+        else
+            if (load_segment_descriptor_to_hax_desct(vcpu, tss->ldt_selector, &state._ldt)) return 1;
+    }
+    else
+    {
+        segment_desc_t _ldt;
+
+        if (load_segment_descriptor_to_hax_desct(vcpu, tss->ldt_selector, &state._ldt)) return 1;
+        _ldt = vcpu->state->_ldt;
+        vcpu->state->_ldt = state._ldt;
+        if (load_segment_descriptor_to_hax_desct(vcpu, tss->es, &state._es) ||
+            load_segment_descriptor_to_hax_desct(vcpu, tss->cs, &state._cs) ||
+            load_segment_descriptor_to_hax_desct(vcpu, tss->ss, &state._ss) ||
+            load_segment_descriptor_to_hax_desct(vcpu, tss->ds, &state._ds) ||
+            load_segment_descriptor_to_hax_desct(vcpu, tss->fs, &state._fs) ||
+            load_segment_descriptor_to_hax_desct(vcpu, tss->gs, &state._gs)
+            ) return 1;
+        vcpu->state->_ldt = _ldt; // So that it gets updated in vcpu_set_regs
+
+        // Set "Accessed" bit
+        state._es.type |= 1;
+        state._cs.type |= 9;
+        state._ss.type |= 1;
+        state._ds.type |= 1;
+        state._fs.type |= 1;
+        state._gs.type |= 1;
+
+        if (!state._es.desc) state._es.null = 1;
+        if (!state._ds.desc) state._ds.null = 1;
+        if (!state._fs.desc) state._fs.null = 1;
+        if (!state._gs.desc) state._gs.null = 1;
+    }
+
+    vcpu_set_regs(vcpu, &state);
+
+    return 0;
+}
+
+static int exit_task_switch_16(struct vcpu_t *vcpu, uint16_t tss_selector,
+    uint16_t old_tss_sel, uint32_t old_tss_base,
+    struct seg_desc_t *nseg_desc)
+{
+    struct tss_segment_16 tss_segment_16;
+
+    if (gpa_space_read_data(&vcpu->vm->gpa_space, old_tss_base, sizeof(tss_segment_16), (uint8_t*)&tss_segment_16) <= 0)
+        return HAX_EXIT;
+
+    save_state_to_tss16(vcpu, &tss_segment_16);
+
+    if (gpa_space_write_data(&vcpu->vm->gpa_space, old_tss_base, sizeof(tss_segment_16), (uint8_t*)&tss_segment_16) <= 0)
+        return HAX_EXIT;
+
+    if (gpa_space_read_data(&vcpu->vm->gpa_space, (nseg_desc->_base1 << 24) | nseg_desc->_base0,
+        sizeof(tss_segment_16), (uint8_t*)&tss_segment_16) <= 0)
+        return HAX_EXIT;
+
+    if (old_tss_sel != 0xffff) {
+        tss_segment_16.prev_task_link = old_tss_sel;
+
+        if (gpa_space_write_data(&vcpu->vm->gpa_space,
+            (nseg_desc->_base1 << 24) | nseg_desc->_base0,
+            sizeof(tss_segment_16.prev_task_link),
+            (uint8_t*)&tss_segment_16.prev_task_link) <= 0)
+            return HAX_EXIT;
+    }
+
+    if (load_state_from_tss16(vcpu, &tss_segment_16))
+        return HAX_EXIT;
+
+    return HAX_RESUME;
+}
+
+static int exit_task_switch_32(struct vcpu_t *vcpu, uint16_t tss_selector,
+    uint16_t old_tss_sel, uint32_t old_tss_base,
+    struct seg_desc_t *nseg_desc)
+{
+    struct tss_segment_32 tss_segment_32;
+
+    if (gpa_space_read_data(&vcpu->vm->gpa_space, old_tss_base, sizeof(tss_segment_32), (uint8_t*)&tss_segment_32) <= 0)
+        return HAX_EXIT;
+
+    save_state_to_tss32(vcpu, &tss_segment_32);
+
+    if (gpa_space_write_data(&vcpu->vm->gpa_space, old_tss_base, sizeof(tss_segment_32), (uint8_t*)&tss_segment_32) <= 0)
+        return HAX_EXIT;
+
+    if (gpa_space_read_data(&vcpu->vm->gpa_space, (nseg_desc->_base1 << 24) | nseg_desc->_base0,
+        sizeof(tss_segment_32), (uint8_t*)&tss_segment_32) <= 0)
+        return HAX_EXIT;
+
+    if (old_tss_sel != 0xffff) {
+        tss_segment_32.prev_task_link = old_tss_sel;
+
+        if (gpa_space_write_data(&vcpu->vm->gpa_space,
+            (nseg_desc->_base1 << 24) | nseg_desc->_base0,
+            sizeof(tss_segment_32.prev_task_link),
+            (uint8_t*)&tss_segment_32.prev_task_link) <= 0)
+            return HAX_EXIT;
+    }
+
+    if (load_state_from_tss32(vcpu, &tss_segment_32))
+        return HAX_EXIT;
+
+    return HAX_RESUME;
+}
+
+static int exit_taskswitch(struct vcpu_t *vcpu, struct hax_tunnel *htun)
+{
+    interruption_info_t exit_intr_info;
+    uint32_t tss_selector, old_tss_sel;
+    uint64_t old_tss_base, reason;
+    struct seg_desc_t nseg_desc, cseg_desc;
+    uint32_t vmcs_err = 0, vect_info, idt_v, type;
+    struct segment_desc_t tr_seg;
+    preempt_flag flags;
+    int ret;
+    uint64_t len;
+
+    vcpu_vmread_all(vcpu);
+    reason = vmx(vcpu, exit_qualification).task_switch.source;
+    exit_intr_info.raw = vmx(vcpu, exit_intr_info).raw;
+    tss_selector = vmx(vcpu, exit_qualification).task_switch.selector;
+    vect_info = vmx(vcpu, exit_idt_vectoring);
+    idt_v = vect_info & INTR_INFO_VALID_MASK;
+    type = (vect_info & INTR_INFO_TYPE_MASK) >> 8;
+
+    /* TODO:
+    if (reason == TASK_SWITCH_GATE && idt_v) {
+        switch (type) {
+        case NMI:
+            //vcpu->arch.nmi_injected = false;
+            if (vmx(vcpu, pin_ctls) & VIRTUAL_NMIS)
+                vmx(vcpu, interruptibility_state).raw |= 8u;
+            break;
+        case INTERRUPT:
+        case SWINT:
+            vcpu->event_injected = 0;
+            break;
+        case EXCEPTION:
+        case UNPRIV_TRAP:
+            vcpu->event_injected = 0;
+            break;
+        default:
+            break;
+        }
+    }
+    */
+
+    if (!idt_v || (type != EXCEPTION &&
+        type != INTERRUPT &&
+        type != NMI))
+    {
+        advance_rip(vcpu);
+        vmwrite(vcpu, GUEST_RIP, vcpu->state->_rip);
+    }
+
+    old_tss_sel = vcpu->state->_tr.selector;
+    vcpu_translate(vcpu, vcpu->state->_tr.base, 0, &old_tss_base, NULL, false);
+
+    if (load_guest_segment_descriptor(vcpu, tss_selector, &nseg_desc) ||
+        load_guest_segment_descriptor(vcpu, old_tss_sel, &cseg_desc))
+        return HAX_RESUME;
+
+    if (reason != TASK_SWITCH_IRET)  {
+        uint32_t cpl;
+
+        cpl = (vcpu->state->_cr0 & CR0_PE) ? ((vcpu->state->_eflags & EFLAGS_VM) ? 3 : vcpu->state->_cs.dpl) : 0;
+        if ((tss_selector & 3) > nseg_desc._dpl || cpl > nseg_desc._dpl) {
+            hax_inject_exception(vcpu, VECTOR_GP, 0);
+            return HAX_RESUME;
+        }
+    }
+
+    if (!nseg_desc._present || (nseg_desc._limit0 | (nseg_desc._limit1 << 16)) < 0x67) {
+        hax_inject_exception(vcpu, VECTOR_TS, tss_selector & 0xfffc);
+        return HAX_RESUME;
+    }
+
+    if (reason == TASK_SWITCH_IRET || reason == TASK_SWITCH_JMP) {
+        cseg_desc._type &= ~(1 << 1); //clear the B flag
+        save_guest_segment_descriptor(vcpu, old_tss_sel, &cseg_desc);
+    }
+
+    if (reason == TASK_SWITCH_IRET) {
+        vcpu->state->_rflags &= ~EFLAGS_NT;
+        vmwrite(vcpu, GUEST_RFLAGS, vcpu->state->_rflags);
+    }
+
+    if (reason != TASK_SWITCH_CALL && reason != TASK_SWITCH_GATE)
+        old_tss_sel = 0xffff;
+
+    if (nseg_desc._type & 8)
+        ret = exit_task_switch_32(vcpu, tss_selector, old_tss_sel, old_tss_base, &nseg_desc);
+    else
+        ret = exit_task_switch_16(vcpu, tss_selector, old_tss_sel, old_tss_base, &nseg_desc);
+
+    if (reason == TASK_SWITCH_CALL || reason == TASK_SWITCH_GATE) {
+        vcpu->state->_rflags |= EFLAGS_NT;
+        vmwrite(vcpu, GUEST_RFLAGS, vcpu->state->_rflags);
+    }
+
+    if (reason != TASK_SWITCH_IRET) {
+        nseg_desc._type |= (1 << 1);
+        save_guest_segment_descriptor(vcpu, tss_selector, &nseg_desc);
+    }
+
+    vcpu->state->_cr0 |= (uint64_t)CR0_TS;
+    vmwrite_cr(vcpu);
+
+    seg_desct_to_hax_desct(&nseg_desc, tss_selector, &vcpu->state->_tr);
+    vcpu->state->_tr.type = 11;
+    VMWRITE_SEG(vcpu, TR, vcpu->state->_tr);
+
+    return ret;
+}
 static int exit_exc_nmi(struct vcpu_t *vcpu, struct hax_tunnel *htun)
 {
     struct vcpu_state_t *state = vcpu->state;
