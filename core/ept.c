@@ -303,7 +303,7 @@ void ept_free (hax_vm_t *hax_vm)
 
     hax_assert(ept);
 
-    if (!ept->ept_root_page)
+    if (!ept || !ept->ept_root_page)
         return;
 
     hax_info("ept_free: Calling INVEPT\n");
