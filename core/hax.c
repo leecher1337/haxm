@@ -344,6 +344,11 @@ int hax_get_capability(void *buf, int bufLeng, int *outLength)
         cap->winfo |= HAX_CAP_TUNNEL_PAGE;
         cap->winfo |= HAX_CAP_RAM_PROTECTION;
         cap->winfo |= HAX_CAP_DEBUG;
+        // Advertise that SET_RAM's HAX_RAM_INFO_FAULTISMMIO flag is decoded
+        // correctly (see the flag-translation fix in handle_set_ram()).  User
+        // mode keys on this before using FAULTISMMIO so an old driver without
+        // the fix is never asked to (which would crash the kernel).
+        cap->winfo |= HAX_CAP_RAM_FAULTISMMIO;
         if (cpu_data->vmx_info._ept_cap) {
             cap->winfo |= HAX_CAP_EPT;
         }

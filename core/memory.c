@@ -270,7 +270,27 @@ static int handle_set_ram(struct vm_t *vm, uint64_t start_gpa, uint64_t size,
         return ret;
     }
 
-    ret = memslot_set_mapping(gpa_space, start_gfn, npages, start_uva, flags);
+    /*
+     * Translate the user-space HAX_RAM_INFO_* flags to the internal
+     * HAX_MEMSLOT_* flags before handing them to the memslot layer.  ROM
+     * (0x01) and INVALID (0x80) happen to share the same bit values, but
+     * FAULTISMMIO is 0x10 in the API and 0x20 internally -- AND the API's
+     * 0x10 collides with HAX_MEMSLOT_INVALIDUVA (0x10).  Passing the raw API
+     * flags here (the historical behaviour) made memslot_set_mapping() read a
+     * FAULTISMMIO request as INVALIDUVA: it skipped ramblock_find(), left
+     * memslot->block == NULL (-> NULL-deref crash in memslot_dump_list), and
+     * never set HAX_MEMSLOT_FAULTISMMIO so ept2 never trapped the page.  The
+     * coalesced.c caller already passes internal flags; do the same here.
+     * (COALESCED is handled separately below and is not a memslot flag.)
+     */
+    {
+        uint32_t memslot_flags = 0;
+        if (flags & HAX_RAM_INFO_ROM)         memslot_flags |= HAX_MEMSLOT_READONLY;
+        if (flags & HAX_RAM_INFO_INVALID)     memslot_flags |= HAX_MEMSLOT_INVALID;
+        if (flags & HAX_RAM_INFO_FAULTISMMIO) memslot_flags |= HAX_MEMSLOT_FAULTISMMIO;
+        ret = memslot_set_mapping(gpa_space, start_gfn, npages, start_uva,
+                                  memslot_flags);
+    }
     if (ret) {
         hax_error("%s: memslot_set_mapping() failed: ret=%d, start_gfn=0x%llx,"
                   " npages=0x%llx, start_uva=0x%llx, flags=0x%x\n", __func__,

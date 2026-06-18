@@ -149,12 +149,17 @@ void memslot_dump_list(hax_gpa_space *gpa_space)
     hax_info("memslot dump begins:\n");
     hax_list_entry_for_each(memslot, &gpa_space->memslot_list, hax_memslot,
                             entry) {
+        // A memslot created with HAX_MEMSLOT_INVALIDUVA (e.g. a pure-MMIO
+        // slot) has no backing RAM block; never dereference it unconditionally
+        // -- a logging routine must not be able to crash the kernel.
+        uint64_t block_base_uva = (memslot->block != NULL)
+                                  ? memslot->block->base_uva : 0;
         hax_info("memslot [%d]: base_gfn = 0x%016llx, npages = 0x%llx, "
                  "uva = 0x%016llx, flags = 0x%02x "
                  "(block_base_uva = 0x%016llx, offset_within_block = 0x%llx)\n",
                  i++, memslot->base_gfn, memslot->npages,
-                 memslot->block->base_uva + memslot->offset_within_block,
-                 memslot->flags, memslot->block->base_uva,
+                 block_base_uva + memslot->offset_within_block,
+                 memslot->flags, block_base_uva,
                  memslot->offset_within_block);
     }
     hax_info("memslot dump ends!\n");

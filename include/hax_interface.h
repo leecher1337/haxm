@@ -202,6 +202,12 @@ struct hax_module_version {
 #define HAX_CAP_RAM_PROTECTION     (1 << 6)
 #define HAX_CAP_DEBUG              (1 << 7)
 #define HAX_CAP_COALESCED          (1 << 9)
+// (bit 8 left reserved.)  The driver correctly handles the SET_RAM
+// HAX_RAM_INFO_FAULTISMMIO flag (translates it to the internal
+// HAX_MEMSLOT_FAULTISMMIO bit).  Drivers without this fix mis-decode
+// FAULTISMMIO as INVALIDUVA -> NULL block -> kernel crash, so user mode MUST
+// check this bit before using FAULTISMMIO.
+#define HAX_CAP_RAM_FAULTISMMIO    (1 << 10)
 
 struct hax_capabilityinfo {
     /*
