@@ -103,6 +103,20 @@ int ept_handle_access_violation(hax_gpa_space *gpa_space, hax_ept_tree *tree,
         return 0;
     }
 
+    // A FAULTISMMIO slot is a software per-access MMIO trap: never install an
+    // EPT entry for it, so EVERY guest read/write to the page faults out and is
+    // handled as a fast-MMIO request (the device model -- e.g. CVIDC EGA planes
+    // -- emulates the access).  Without this early return the code below maps
+    // the slot to its backing RAM, after which accesses stop faulting and write
+    // silently into the flat backing, never reaching the device model.  (The
+    // chunk-protected FAULTISMMIO check further down only fires for pages that
+    // user space has additionally VirtualProtect()ed, which is not the case for
+    // the NTVDM EGA aperture -- hence the previously black graphics screen.)
+    if (slot->flags & HAX_MEMSLOT_FAULTISMMIO) {
+        hax_debug("%s: gpa=0x%llx is a FAULTISMMIO trap page\n", __func__, gpa);
+        return 0;
+    }
+
     // Ideally we should call gpa_space_is_page_protected() and ask user space
     // to unprotect just the host virtual page that |gfn| maps to. But since we
     // pin host RAM one chunk (rather than one page) at a time, if the chunk

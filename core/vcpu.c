@@ -2101,7 +2101,16 @@ static bool is_mmio_address(struct vcpu_t *vcpu, hax_paddr_t gpa)
 #ifdef CONFIG_HAX_EPT2
         hax_memslot *slot = memslot_find(&vcpu->vm->gpa_space,
                                          gpa >> PG_ORDER_4K);
-        return !slot;
+        // A FAULTISMMIO slot is a software per-access MMIO trap: it has a valid
+        // memslot but every access must be emulated as MMIO (routed to the
+        // device model), NOT served from the backing RAM.  Without this, only
+        // instructions that carry EM_OPS_NO_TRANSLATION (simple single-operand
+        // MOVs, whose faulting GPA is known from the exit) reach the device;
+        // string/REP and two-memory-operand instructions -- and crucially VRAM
+        // *reads* that load the EGA latches -- get is_mmio_address()==false and
+        // are silently read/written against backing RAM, bypassing CVIDC.  That
+        // left EGA latch-copy blits loading garbage latches => garbled video.
+        return !slot || (slot->flags & HAX_MEMSLOT_FAULTISMMIO);
 #else  // !CONFIG_HAX_EPT2
         return !ept_translate(vcpu, gpa, PG_ORDER_4K, &hpa);
 #endif  // CONFIG_HAX_EPT2
