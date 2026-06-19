@@ -209,7 +209,7 @@ static const struct em_opcode_t opcode_table[256] = {
     G(opcode_group1, op_modrm_rm, op_simm, op_none, INSN_BYTEOP),
     G(opcode_group1, op_modrm_rm, op_simm8, op_none, 0),
     F2_BV(em_test, op_modrm_rm, op_modrm_reg, op_none, INSN_MODRM),
-    X2(N),  /* TODO: 0x86 & 0x87 (XCHG) */
+    I2_BV(em_xchg, op_modrm_rm, op_modrm_reg, op_none, INSN_MODRM),  /* 0x86 & 0x87 XCHG r/m,reg */
     I2_BV(em_mov, op_modrm_rm, op_modrm_reg, op_none, INSN_MODRM | INSN_MOV),
     I2_BV(em_mov, op_modrm_reg, op_modrm_rm, op_none, INSN_MODRM | INSN_MOV),
     X4(N),
@@ -923,13 +923,19 @@ static void em_movsx(struct em_context_t *ctxt)
 
 static void em_xchg(struct em_context_t *ctxt)
 {
-    uint64_t src1, src2;
-    src1 = ctxt->src1.value;
-    src2 = ctxt->src2.value;
-    ctxt->src1.value = src2;
-    ctxt->src2.value = src1;
+    // XCHG r/m, reg : table entry is (dst=op_modrm_rm, src1=op_modrm_reg).
+    // The memory (or register) operand is dst so the framework drives its
+    // write-back through the normal operand_write(dst) path at the end of
+    // em_emulate() -- which correctly handles the MMIO exit/re-entry (and EGA
+    // FAULTISMMIO: the dst *read* above loaded the CVIDC latches via read_b,
+    // and this write goes out via write_b).  The register half cannot fault,
+    // so we complete it here.  Both writes are guarded by their
+    // OP_WRITE_FINISHED/PENDING flags, so re-running this handler on each MMIO
+    // re-entry is idempotent.
+    uint64_t tmp = ctxt->dst.value;
+    ctxt->dst.value  = ctxt->src1.value;
+    ctxt->src1.value = tmp;
     operand_write(ctxt, &ctxt->src1);
-    operand_write(ctxt, &ctxt->src2);
 }
 
 em_status_t EMCALL em_decode_insn(struct em_context_t *ctxt, const uint8_t *insn)
