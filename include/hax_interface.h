@@ -181,6 +181,24 @@ struct hax_coalesced_mmio {
     uint32_t size;
     struct hax_fastmmio mmio[0x1000];
 } PACKED;
+
+/* HAX_EXIT_STRING_MMIO descriptor.  A whole REP MOVS/STOS whose destination is
+ * an MMIO (FAULTISMMIO) page is batched into ONE exit by the in-kernel emulator
+ * instead of faulting once per element.  The kernel has
+ * already advanced RIP, RDI/RSI and zeroed RCX before exiting, so the resume is
+ * unconditional (no SET_REGS round trip needed). */
+#define HAX_STRING_STOS 0
+#define HAX_STRING_MOVS 1
+struct hax_string_mmio {
+    uint8_t  op;        // HAX_STRING_STOS / HAX_STRING_MOVS
+    uint8_t  size;      // element size: 1, 2 or 4
+    uint8_t  df;        // 0 = forward, 1 = backward (DF set)
+    uint8_t  pad;
+    uint32_t count;     // element count (original RCX)
+    uint64_t dst_gpa;   // first destination GPA (ES:DI)
+    uint64_t src_gpa;   // first source GPA (DS:SI) -- MOVS only
+    uint64_t value;     // fill value AL/AX/EAX -- STOS only
+} PACKED;
 struct hax_module_version {
     uint32_t compat_version;
     uint32_t cur_version;

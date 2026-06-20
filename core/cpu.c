@@ -359,6 +359,15 @@ int cpu_vmx_execute(struct vcpu_t *vcpu, struct hax_tunnel *htun)
             htun->_exit_status = HAX_EXIT_PAUSED;
             return 0;
         }
+        if (vcpu->kick_pending) {
+            /* An async kick (HAX_VCPU_IOCTL_KICKOFF) forced us out of the guest
+             * (or arrived between runs). Bail to userspace with a benign status
+             * so it can inject a pending host IRQ via the interrupt-window
+             * request on the next run. */
+            vcpu->kick_pending = 0;
+            htun->_exit_status = HAX_EXIT_TIMER;
+            return 0;
+        }
         if (vcpu_is_panic(vcpu))
             return 0;
 

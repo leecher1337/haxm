@@ -115,7 +115,9 @@ enum exit_status {
     HAX_EXIT_PAGEFAULT,
     HAX_EXIT_DEBUG,
     HAX_EXIT_NMI,
-    HAX_EXIT_COALESCED_MMIO
+    HAX_EXIT_COALESCED_MMIO,
+    HAX_EXIT_STRING_MMIO,
+    HAX_EXIT_TIMER          /* benign forced exit (async kick); userspace re-iterates */
 };
 
 enum run_flag {

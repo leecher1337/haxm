@@ -105,6 +105,8 @@ static int exit_mtf(struct vcpu_t *vcpu, struct hax_tunnel *htun);
 static int null_handler(struct vcpu_t *vcpu, struct hax_tunnel *hun);
 
 static void advance_rip(struct vcpu_t *vcpu);
+static uint64_t vcpu_get_segment_base(void *obj, uint32_t segment);
+static bool vcpu_try_string_mmio_batch(struct vcpu_t *vcpu, em_context_t *em);
 static void handle_machine_check(struct vcpu_t *vcpu);
 
 static void handle_cpuid_virtual(struct vcpu_t *vcpu, uint32_t eax, uint32_t ecx);
@@ -2117,6 +2119,109 @@ static bool is_mmio_address(struct vcpu_t *vcpu, hax_paddr_t gpa)
     }
 }
 
+// Batch a whole REP MOVS/STOS whose destination is an MMIO (FAULTISMMIO) page
+// into a single HAX_EXIT_STRING_MMIO, rather than faulting once per element.
+// On success the instruction is fully retired in the kernel (RIP, RDI,
+// RSI advanced; RCX = 0; em->finished = true) so the resume is unconditional,
+// and the caller returns HAX_EXIT to let user space replay the run through the
+// device model.  Returns false to fall through to normal per-element emulation.
+static bool vcpu_try_string_mmio_batch(struct vcpu_t *vcpu, em_context_t *em)
+{
+    struct vcpu_state_t *state = vcpu->state;
+    struct hax_string_mmio *sm;
+    uint8_t opcode;
+    uint32_t asz = em->address_size, esz = em->operand_size;
+    uint64_t amask = (asz == 2) ? 0xFFFFULL : 0xFFFFFFFFULL;
+    uint64_t cx, di, si = 0, dst_la, src_la = 0, span;
+    int64_t delta;
+    int step, is_movs;
+
+    if (!em->rep)                          // not a REP string op
+        return false;
+    if (state->_cr0 & CR0_PG)              // paged: linear run not contiguous in phys
+        return false;
+    if (em->len == 0)
+        return false;
+    opcode = em->insn[em->len - 1];        // opcode byte (string ops have no trailing bytes)
+    switch (opcode) {
+    case 0xAA: case 0xAB: is_movs = 0; break;   // STOS
+    case 0xA4: case 0xA5: is_movs = 1; break;   // MOVS
+    default:              return false;          // LODS/CMPS/SCAS: not batched
+    }
+    if (esz != 1 && esz != 2 && esz != 4)
+        return false;
+    // A segment override on MOVS source is rare; skip batching to avoid getting
+    // the source base wrong (falls back to safe per-element emulation).
+    if (is_movs && em->override_segment != SEG_NONE)
+        return false;
+
+    cx = state->_rcx & amask;
+    if (cx < 2)                            // 0 -> em does nothing; 1 -> not worth a round trip
+        return false;
+
+    step = (state->_rflags & RFLAGS_DF) ? -(int)esz : (int)esz;
+    span = (cx - 1) * (uint64_t)esz;       // first..last element start (magnitude)
+
+    di     = state->_rdi & amask;
+    dst_la = (state->_es.base + di) & 0xFFFFFULL;   // real-mode 20-bit linear == phys
+    // Only batch when the destination is a FAULTISMMIO (software-MMIO) page --
+    // i.e. the EGA VRAM trap.  A plain reserved-MMIO/device page (no slot) keeps
+    // per-access semantics via the normal fault path.
+    {
+        hax_memslot *dslot = memslot_find(&vcpu->vm->gpa_space,
+                                          dst_la >> PG_ORDER_4K);
+        if (!dslot || !(dslot->flags & HAX_MEMSLOT_FAULTISMMIO))
+            return false;
+    }
+    // Bail if the run would wrap the address-size window or the 1 MB boundary
+    // (EGA blits never do); per-element emulation handles those correctly.
+    if (step > 0) {
+        if (di + span + esz > amask + 1)      return false;
+        if (dst_la + span + esz > 0x100000)   return false;
+    } else {
+        if (span + esz > di + 1)              return false;
+        if (span + esz > dst_la + 1)          return false;
+    }
+
+    sm = (struct hax_string_mmio *)vcpu->io_buf;
+    sm->size    = (uint8_t)esz;
+    sm->df      = (step < 0) ? 1 : 0;
+    sm->count   = (uint32_t)cx;
+    sm->dst_gpa = dst_la;
+    sm->src_gpa = 0;
+    sm->value   = 0;
+
+    if (is_movs) {
+        si     = state->_rsi & amask;
+        src_la = (state->_ds.base + si) & 0xFFFFFULL;
+        if (step > 0) {
+            if (si + span + esz > amask + 1)      return false;
+            if (src_la + span + esz > 0x100000)   return false;
+        } else {
+            if (span + esz > si + 1)              return false;
+            if (span + esz > src_la + 1)          return false;
+        }
+        sm->op      = HAX_STRING_MOVS;
+        sm->src_gpa = src_la;
+    } else {
+        sm->op    = HAX_STRING_STOS;
+        sm->value = state->_rax &
+            ((esz == 1) ? 0xFFULL : (esz == 2) ? 0xFFFFULL : 0xFFFFFFFFULL);
+    }
+
+    // Retire the instruction in the kernel so the resume just continues.
+    delta = (int64_t)cx * step;
+    state->_rdi = (state->_rdi & ~amask) | (((uint64_t)((int64_t)di + delta)) & amask);
+    if (is_movs)
+        state->_rsi = (state->_rsi & ~amask) | (((uint64_t)((int64_t)si + delta)) & amask);
+    state->_rcx &= ~amask;
+    advance_rip(vcpu);
+    em->finished = true;
+
+    vcpu->tunnel->_exit_status = HAX_EXIT_STRING_MMIO;
+    return true;
+}
+
 static int vcpu_emulate_insn(struct vcpu_t *vcpu)
 {
     em_status_t rc;
@@ -2181,6 +2286,8 @@ static int vcpu_emulate_insn(struct vcpu_t *vcpu)
                   vcpu->vmx.exit_instr_length, cs_base, rip, instr[0], instr[1],
                   instr[2], instr[3], instr[4], instr[5]);
     }
+    if (vcpu_try_string_mmio_batch(vcpu, em_ctxt))
+        return HAX_EXIT;
     rc = em_emulate_insn(em_ctxt);
     if (rc < 0) {
         hax_panic_vcpu(vcpu, "em_emulate_insn() failed: vcpu_id=%u,"

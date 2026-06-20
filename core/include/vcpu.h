@@ -224,6 +224,12 @@ struct vcpu_t {
     /* Debugging */
     uint32_t debug_control;
 
+    /* Async kick (HAX_VCPU_IOCTL_KICKOFF): set from another thread to force the
+     * run loop to bail out to userspace so a pending host-side IRQ can be
+     * injected. Standalone (not a bitfield) so the cross-thread store is an
+     * atomic aligned 32-bit write and cannot corrupt adjacent flags. */
+    uint32_t kick_pending;
+
     /* Interrupt stuff */
     uint32_t intr_pending[8];
     uint32_t nr_pending_intrs;
