@@ -183,7 +183,17 @@ int ept_tree_init(hax_ept_tree *tree)
     tree->eptp.ept_mt = HAX_EPT_MEMTYPE_WB;
     tree->eptp.max_level = HAX_EPT_LEVEL_MAX;
     tree->eptp.pfn = pfn;
-    hax_info("%s: eptp=0x%llx\n", __func__, tree->eptp.value);
+    /* Enable EPT accessed/dirty flags when the host supports it, so the guest's
+     * VRAM writes set epte.dirty and we can serve a dirty bitmap for the video
+     * sync (see ept_tree_query_clear_dirty).  Harmless when unsupported: the
+     * bit stays 0, dirty bits never get set, and the userspace falls back to a
+     * full VRAM scan. */
+    {
+        extern bool ept_cap_ad_supported(void);   /* ept.c */
+        tree->eptp.track_access = ept_cap_ad_supported() ? 1 : 0;
+    }
+    hax_info("%s: eptp=0x%llx (track_access=%u)\n", __func__,
+             tree->eptp.value, (unsigned)tree->eptp.track_access);
     return 0;
 }
 
@@ -660,6 +670,53 @@ void ept_tree_walk(hax_ept_tree *tree, uint64_t gfn, epte_visitor visit_epte,
 
     ret = hax_unmap_page_frame(&prev_kmap);
     hax_assert(ret == 0);
+}
+
+struct dirty_scan_ctx {
+    uint8_t *bitmap;
+    uint64_t base_gfn;
+    int      found;
+};
+
+static void dirty_scan_visitor(hax_ept_tree *tree, uint64_t gfn, int level,
+                               hax_epte *epte, void *opaque)
+{
+    struct dirty_scan_ctx *ctx = (struct dirty_scan_ctx *)opaque;
+
+    (void)tree;
+    // Only the 4K leaf PTE carries the dirty bit we want.  VRAM is mapped in 4K
+    // pages; a 2MB large-page leaf is never reached at PT level here, so it just
+    // falls through to the userspace full-scan -- acceptable.
+    if (level != HAX_EPT_LEVEL_PT)
+        return;
+    if (!epte->perm)
+        return;                 // not present -> treat as clean
+    if (epte->dirty) {
+        uint64_t idx = gfn - ctx->base_gfn;
+        ctx->bitmap[idx >> 3] |= (uint8_t)(1u << (idx & 7));
+        epte->dirty = 0;        // clear so the HW re-marks on the next write
+        ctx->found++;
+    }
+}
+
+// Reads and clears the EPT dirty bit for each 4K page in the GFN range, marking
+// |bitmap| (1 bit per page, LSB-first within each byte).  Returns the number of
+// dirty pages found.  Best-effort: the caller should INVEPT afterward so the HW
+// re-arms, and the userspace should periodically full-scan as a safety net.
+// With EPT A/D disabled, all bits stay 0.
+int ept_tree_query_clear_dirty(hax_ept_tree *tree, uint64_t base_gfn,
+                               uint64_t npages, uint8_t *bitmap)
+{
+    struct dirty_scan_ctx ctx;
+    uint64_t i;
+
+    ctx.bitmap   = bitmap;
+    ctx.base_gfn = base_gfn;
+    ctx.found    = 0;
+    memset(bitmap, 0, (npages + 7) >> 3);
+    for (i = 0; i < npages; i++)
+        ept_tree_walk(tree, base_gfn + i, dirty_scan_visitor, &ctx);
+    return ctx.found;
 }
 
 void invalidate_pte(hax_ept_tree *tree, uint64_t gfn, int level, hax_epte *epte,

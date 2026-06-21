@@ -78,6 +78,16 @@ struct vm_t {
     hax_gpa_space gpa_space;
     hax_ept_tree ept_tree;
     hax_gpa_space_listener gpa_space_listener;
+    /* Write-protect dirty-page logging -- the EPT-A/D fallback for hosts whose
+     * CPU lacks accessed/dirty flags (e.g. Ivy Bridge).  Inert until armed; see
+     * hax_vm_dirty_log_* in memory.c.  Zero-initialised (vm memset on create) ==
+     * disarmed. */
+    struct {
+        uint64_t  base_gfn;   /* first guest page of the logged range        */
+        uint32_t  npages;     /* range length in 4K pages                    */
+        uint8_t  *bitmap;     /* 1 bit/page, LSB-first; NULL == disarmed     */
+        bool      active;
+    } dlog;
 #endif  // CONFIG_HAX_EPT2
 #ifdef HAX_ARCH_X86_32
     uint64_t hva_limit;

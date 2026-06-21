@@ -245,6 +245,7 @@ int hax_teardown_vm(struct vm_t *vm)
     hax_mutex_free(vm->vm_lock);
     hax_put_vm_mid(vm->vm_id);
 #ifdef CONFIG_HAX_EPT2
+    hax_vm_dirty_log_disarm(vm);
     gpa_space_remove_listener(&vm->gpa_space, &vm->gpa_space_listener);
     ept_tree_free(&vm->ept_tree);
     gpa_space_free(&vm->gpa_space);

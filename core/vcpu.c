@@ -4329,6 +4329,11 @@ static int exit_ept_violation(struct vcpu_t *vcpu, struct hax_tunnel *htun)
     }
     if (ret > 0) {
         // The EPT violation is due to a RAM/ROM access and has been handled
+        // (a single 4K PTE was just installed -- chunks are one page).  Record
+        // the page for write-protect dirty logging; a cheap no-op unless this VM
+        // has dirty-logging armed over a range containing this GFN (the EPT-A/D
+        // fallback for hosts like Ivy Bridge -- see hax_vm_dirty_log_* / Stage 2).
+        hax_vm_dirty_log_mark(vcpu->vm, gpa >> PG_ORDER_4K);
         return HAX_RESUME;
     }
     // ret == 0: The EPT violation is due to MMIO

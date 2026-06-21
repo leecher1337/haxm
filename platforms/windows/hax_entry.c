@@ -419,6 +419,11 @@ NTSTATUS HaxVcpuControl(PDEVICE_OBJECT DeviceObject,
             break;
         }
         case HAX_VCPU_IOCTL_KICKOFF: {
+            /* Force the running vCPU out to userland via an IPI.  (The earlier
+             * kick_pending -> HAX_EXIT_TIMER loop-top bail was redundant -- the
+             * IPI returns through the normal exit_interrupt -> HAX_EXIT_INTERRUPT
+             * path -- and `struct vcpu_t` is opaque in this TU anyway, so don't
+             * touch its members here; vcpu_takeoff() does the work.) */
             vcpu_takeoff(cvcpu);
             break;
         }
@@ -590,6 +595,42 @@ NTSTATUS HaxVmControl(PDEVICE_OBJECT DeviceObject, struct hax_vm_windows *ext,
                 ret = res == -EINVAL ? STATUS_INVALID_PARAMETER
                       : STATUS_UNSUCCESSFUL;
             }
+            break;
+        }
+        case HAX_VM_IOCTL_QUERY_DIRTY: {
+            struct hax_dirty_query *q;
+            uint64_t base_gfn;
+            uint32_t npages, bmp_bytes;
+            int found;
+            if (inBufLength < sizeof(struct hax_dirty_query)) {
+                ret = STATUS_INVALID_PARAMETER;
+                goto done;
+            }
+            q = (struct hax_dirty_query *)inBuf;
+            /* inBuf and outBuf alias the same METHOD_BUFFERED buffer, so copy
+             * the inputs to locals before the bitmap is written in place. */
+            base_gfn = q->gpa_start >> 12;
+            npages   = q->npages;
+            if (npages == 0 || npages > (1u << 20)) {
+                ret = STATUS_INVALID_PARAMETER;
+                goto done;
+            }
+            bmp_bytes = (npages + 7) >> 3;
+            if (outBufLength < bmp_bytes) {
+                ret = STATUS_BUFFER_TOO_SMALL;
+                goto done;
+            }
+            /* All EPT-tree access lives in core (struct vm_t is opaque here).
+             * found < 0 == host can't track EPT A/D -> fail so userland falls
+             * back to its full 0xFF/shadow scan instead of skipping every page
+             * (which would freeze the screen). */
+            found = hax_vm_query_clear_dirty(cvm, base_gfn, npages,
+                                             (uint8_t *)outBuf);
+            if (found < 0) {
+                ret = STATUS_NOT_SUPPORTED;
+                goto done;
+            }
+            infret = bmp_bytes;
             break;
         }
         case HAX_VM_IOCTL_PROTECT_RAM: {

@@ -57,6 +57,14 @@ int hax_vm_set_ram(struct vm_t *vm, struct hax_set_ram_info *info);
 #ifdef CONFIG_HAX_EPT2
 int hax_vm_set_ram2(struct vm_t *vm, struct hax_set_ram_info2 *info);
 int hax_vm_protect_ram(struct vm_t *vm, struct hax_protect_ram_info *info);
+int hax_vm_query_clear_dirty(struct vm_t *vm, uint64_t base_gfn,
+                             uint32_t npages, uint8_t *bitmap);
+/* Write-protect dirty-page logging (EPT-A/D fallback) -- see memory.c. */
+int  hax_vm_dirty_log_arm(struct vm_t *vm, uint64_t base_gfn, uint32_t npages);
+void hax_vm_dirty_log_disarm(struct vm_t *vm);
+void hax_vm_dirty_log_mark(struct vm_t *vm, uint64_t gfn);
+int  hax_vm_dirty_log_query(struct vm_t *vm, uint64_t base_gfn, uint32_t npages,
+                            uint8_t *out);
 #endif
 int hax_vm_free_all_ram(struct vm_t *vm);
 int in_pmem_range(struct hax_vcpu_mem *pmem, uint64_t va);

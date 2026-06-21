@@ -286,6 +286,16 @@ struct hax_set_ram_info {
     uint64_t va;
 } PACKED;
 
+/* HAX_VM_IOCTL_QUERY_DIRTY: read-and-clear the EPT dirty bits for a GPA range
+ * (e.g. VRAM at A0000) so the userspace video sync only re-scans pages the guest
+ * actually wrote.  Input is this struct; output (same METHOD_BUFFERED buffer) is
+ * the dirty bitmap: npages bits, 1 bit/page LSB-first, (npages+7)/8 bytes. */
+struct hax_dirty_query {
+    uint64_t gpa_start;   /* 4K-aligned start of the range */
+    uint32_t npages;      /* number of 4K pages to query   */
+    uint32_t pad;
+} PACKED;
+
 struct hax_set_ram_info2 {
     uint64_t pa_start;
     uint64_t size;

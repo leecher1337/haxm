@@ -76,6 +76,13 @@ static bool ept_has_cap(uint64_t cap)
     return (ept_capabilities & cap) != 0;
 }
 
+// Safe (no assert) variant for the A/D capability, queried during EPT setup
+// before ept_capabilities is guaranteed non-zero on every path.
+bool ept_cap_ad_supported(void)
+{
+    return (ept_capabilities & ept_cap_ad) != 0;
+}
+
 // Get the PDE entry for the specified gpa in EPT
 static epte_t * ept_get_pde(struct hax_ept *ept, hax_paddr_t gpa)
 {

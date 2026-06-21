@@ -32,6 +32,7 @@
 #include "include/vcpu.h"
 #include "include/vm.h"
 #include "include/hax_driver.h"
+#include "include/hax_core_interface.h"
 #include "include/ept.h"
 #ifdef CONFIG_HAX_EPT2
 #include "include/paging.h"
@@ -415,6 +416,134 @@ int hax_vm_protect_ram(struct vm_t *vm, struct hax_protect_ram_info *info)
 {
     return gpa_space_protect_range(&vm->gpa_space, info->pa_start, info->size,
                                    info->flags);
+}
+
+/* Read-and-clear the EPT dirty bitmap for a guest-physical page range (used by
+ * the userland VRAM dirty-page video sync).  Returns the number of dirty pages
+ * found, or -EINVAL if the host CPU can't track EPT accessed/dirty flags (the
+ * caller then falls back to a full scan).  Re-arms tracking with INVEPT whenever
+ * anything was dirty.  Kept here (not in the platform ioctl handler) because
+ * struct vm_t / ept_tree are private to the core. */
+int hax_vm_query_clear_dirty(struct vm_t *vm, uint64_t base_gfn,
+                             uint32_t npages, uint8_t *bitmap)
+{
+    int found;
+
+    if (ept_cap_ad_supported()) {
+        /* Fast path: hardware EPT accessed/dirty flags (Haswell+). */
+        found = ept_tree_query_clear_dirty(&vm->ept_tree, base_gfn, npages,
+                                           bitmap);
+        if (found > 0)
+            invept(vm, EPT_INVEPT_SINGLE_CONTEXT);
+        return found;
+    }
+
+    /* Fallback (no A/D, e.g. Ivy Bridge): access-tracking via PTE invalidation.
+     * Lazy-arm on the first call / range change -- arming invalidates the range,
+     * so nothing is marked yet; report the whole range dirty once so the caller
+     * establishes its baseline with a full scan.  Real per-frame dirty sets
+     * follow on subsequent queries. */
+    if (!vm->dlog.active || vm->dlog.base_gfn != base_gfn ||
+        vm->dlog.npages != npages) {
+        int r = hax_vm_dirty_log_arm(vm, base_gfn, npages);
+        if (r < 0)
+            return r;
+        memset(bitmap, 0xFF, (npages + 7) >> 3);
+        return (int)npages;
+    }
+
+    found = hax_vm_dirty_log_query(vm, base_gfn, npages, bitmap);
+    if (found < 0)
+        return found;
+    /* Re-arm: invalidate the pages accessed since the last query (they now hold
+     * PTEs) so their next write re-faults and re-marks.  Pages still invalidated
+     * are no-ops, so this only touches what changed. */
+    if (ept_tree_invalidate_entries(&vm->ept_tree, base_gfn, npages) > 0)
+        invept(vm, EPT_INVEPT_SINGLE_CONTEXT);
+    return found;
+}
+
+/* --- Write-protect dirty-page logging (EPT-A/D fallback) ---------------------
+/* hax_test_and_set_bit() accesses the 64-bit word holding the bit, so the
+ * bitmap must be allocated in whole qwords (not just ceil-bytes) or a bit in the
+ * last partial qword would touch unallocated memory. */
+#define DLOG_ALLOC_BYTES(npages)  ((uint32_t)(((npages) + 63) >> 6) << 3)
+
+void hax_vm_dirty_log_disarm(struct vm_t *vm)
+{
+    if (vm->dlog.bitmap) {
+        hax_vfree(vm->dlog.bitmap, DLOG_ALLOC_BYTES(vm->dlog.npages));
+        vm->dlog.bitmap = NULL;
+    }
+    vm->dlog.active   = 0;
+    vm->dlog.npages   = 0;
+    vm->dlog.base_gfn = 0;
+}
+
+/* Arm dirty-logging over [base_gfn, base_gfn + npages).  Allocates a fresh
+ * all-clean bitmap.  Re-arming the exact same range is a cheap no-op; a
+ * different range reallocates.  Returns 0, or -errno. */
+int hax_vm_dirty_log_arm(struct vm_t *vm, uint64_t base_gfn, uint32_t npages)
+{
+    uint32_t bytes;
+
+    if (!npages || npages > (1u << 20))
+        return -EINVAL;
+    if (vm->dlog.active && vm->dlog.base_gfn == base_gfn &&
+        vm->dlog.npages == npages)
+        return 0;
+    hax_vm_dirty_log_disarm(vm);
+    bytes = DLOG_ALLOC_BYTES(npages);
+    vm->dlog.bitmap = hax_vmalloc(bytes, 0);
+    if (!vm->dlog.bitmap)
+        return -ENOMEM;
+    memset(vm->dlog.bitmap, 0, bytes);
+    vm->dlog.base_gfn = base_gfn;
+    vm->dlog.npages   = npages;
+    vm->dlog.active   = 1;
+    /* Invalidate the range's EPT PTEs so the guest's next access to each page
+     * re-faults -> the exit_ept_violation hook marks it.  Must INVEPT ourselves:
+     * invept_pending is only auto-flushed by handle_set_ram (memory.c). */
+    if (ept_tree_invalidate_entries(&vm->ept_tree, base_gfn, npages) > 0)
+        invept(vm, EPT_INVEPT_SINGLE_CONTEXT);
+    return 0;
+}
+
+/* Record a guest page as dirtied.  Called from the EPT-violation handler
+ * (stage 2).  No-op when disarmed or out of range. */
+void hax_vm_dirty_log_mark(struct vm_t *vm, uint64_t gfn)
+{
+    uint64_t idx;
+
+    if (!vm->dlog.active || !vm->dlog.bitmap || gfn < vm->dlog.base_gfn)
+        return;
+    idx = gfn - vm->dlog.base_gfn;
+    if (idx >= vm->dlog.npages)
+        return;
+    hax_test_and_set_bit((int)idx, (uint64_t *)vm->dlog.bitmap);
+}
+
+/* Copy the dirty bitmap for [base_gfn, base_gfn + npages) into `out`, then clear
+ * it.  Returns the number of dirty pages, or -EINVAL if not armed for this exact
+ * range.  Used by QUERY_DIRTY's write-protect branch (stage 3). */
+int hax_vm_dirty_log_query(struct vm_t *vm, uint64_t base_gfn, uint32_t npages,
+                           uint8_t *out)
+{
+    uint32_t bytes, i;
+    int found = 0;
+
+    if (!vm->dlog.active || !vm->dlog.bitmap)
+        return -EINVAL;
+    if (base_gfn != vm->dlog.base_gfn || npages != vm->dlog.npages)
+        return -EINVAL;
+    bytes = (npages + 7) >> 3;                 /* meaningful bytes for the caller */
+    memcpy_s(out, bytes, vm->dlog.bitmap, bytes);
+    memset(vm->dlog.bitmap, 0, DLOG_ALLOC_BYTES(npages));   /* incl qword padding */
+    for (i = 0; i < bytes; i++) {
+        uint8_t b = out[i];
+        while (b) { found += b & 1; b >>= 1; }
+    }
+    return found;
 }
 #endif  // CONFIG_HAX_EPT2
 

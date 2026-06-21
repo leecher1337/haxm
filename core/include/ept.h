@@ -181,6 +181,7 @@ static void construct_eptp(eptp_t *entry, hax_paddr_t hpa, uint emt)
 #define ept_cap_sp512G          ((uint64_t)1 << 18)
 #define ept_cap_sp256T          ((uint64_t)1 << 19)
 
+#define ept_cap_ad              ((uint64_t)1 << 21)  /* accessed/dirty flags */
 #define ept_cap_invept          ((uint64_t)1 << 20)
 #define ept_cap_invept_ia       ((uint64_t)1 << 24)
 #define ept_cap_invept_cw       ((uint64_t)1 << 25)
@@ -206,6 +207,8 @@ bool ept_set_pte(hax_vm_t *hax_vm, hax_paddr_t gpa, hax_paddr_t hpa, uint emt,
                  uint mem_type, bool *is_modified);
 void invept(hax_vm_t *hax_vm, uint type);
 bool ept_set_caps(uint64_t caps);
+// True if the host supports EPT accessed/dirty flags (for VRAM dirty tracking).
+bool ept_cap_ad_supported(void);
 
 /* Deprecated API due to low performance */
 bool ept_translate(struct vcpu_t *vcpu, hax_paddr_t gpa, uint order, hax_paddr_t *hpa);

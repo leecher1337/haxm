@@ -209,6 +209,12 @@ typedef void (*epte_visitor)(hax_ept_tree *tree, uint64_t gfn, int level,
 void ept_tree_walk(hax_ept_tree *tree, uint64_t gfn, epte_visitor visit_epte,
                    void *opaque);
 
+// Reads + clears the EPT dirty bit for each 4K page in [base_gfn, base_gfn +
+// npages), recording it in |bitmap| (1 bit/page, LSB-first).  Returns the count
+// of dirty pages.  Backs the VRAM dirty-bitmap video sync (HAX_VM_IOCTL_QUERY_DIRTY).
+int ept_tree_query_clear_dirty(hax_ept_tree *tree, uint64_t base_gfn,
+                               uint64_t npages, uint8_t *bitmap);
+
 // Handles a guest memory mapping change from RAM/ROM to MMIO. Used as a
 // |hax_gpa_space_listener| callback.
 // |listener|: The |hax_gpa_space_listener| that invoked this callback.
