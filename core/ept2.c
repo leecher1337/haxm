@@ -88,6 +88,20 @@ int ept_handle_access_violation(hax_gpa_space *gpa_space, hax_ept_tree *tree,
     combined_perm = (uint) ((qual.raw >> 3) & 7);
     // See IA SDM Vol. 3C 27.2.1 Table 27-7, especially note 2
     if (combined_perm != HAX_EPT_PERM_NONE) {
+        // The PTE for the faulting GPA is present, so this is a permission
+        // violation rather than a missing mapping.  The one case we handle: a
+        // guest WRITE to a "flat-read / trap-write" aperture
+        // (FAULTISMMIO|READONLY) -- its reads are served by a read-only (RX) PTE
+        // with no VM exit, and the write that faults here must be emulated as an
+        // MMIO request (routed to the device model), NOT skipped.
+        // (qual bit 1 == data-write access.)  Everything else stays unhandled.
+        hax_memslot *roslot = memslot_find(gpa_space, gpa >> PG_ORDER_4K);
+        if (roslot &&
+            (roslot->flags & HAX_MEMSLOT_FAULTISMMIO) &&
+            (roslot->flags & HAX_MEMSLOT_READONLY) &&
+            (qual.raw & 0x2)) {
+            return 0;   // emulate the write as MMIO (vcpu_emulate_insn)
+        }
         hax_error("%s: Cannot handle the case where the PTE corresponding to"
                   " the faulting GPA is present: qual=0x%llx, gpa=0x%llx\n",
                   __func__, qual.raw, gpa);
@@ -113,8 +127,23 @@ int ept_handle_access_violation(hax_gpa_space *gpa_space, hax_ept_tree *tree,
     // user space has additionally VirtualProtect()ed, which is not the case for
     // the NTVDM EGA aperture -- hence the previously black graphics screen.)
     if (slot->flags & HAX_MEMSLOT_FAULTISMMIO) {
-        hax_debug("%s: gpa=0x%llx is a FAULTISMMIO trap page\n", __func__, gpa);
-        return 0;
+        if (slot->flags & HAX_MEMSLOT_READONLY) {
+            // Flat-read / trap-write aperture: a WRITE (qual bit 1) is emulated
+            // as an MMIO request (device model); a READ falls through to install
+            // a READ-ONLY (RX) PTE so subsequent reads are served from backing
+            // RAM with no VM exit -- halving the per-access exits for EGA
+            // read-modify-write drawing.  A write to that
+            // RX PTE re-enters above via the combined_perm!=NONE branch.
+            if (qual.raw & 0x2) {
+                hax_debug("%s: gpa=0x%llx flat-read aperture: WRITE -> MMIO\n",
+                          __func__, gpa);
+                return 0;
+            }
+            // read: fall through; the is_rom path below installs a read-only PTE
+        } else {
+            hax_debug("%s: gpa=0x%llx is a FAULTISMMIO trap page\n", __func__, gpa);
+            return 0;
+        }
     }
 
     // Ideally we should call gpa_space_is_page_protected() and ask user space
